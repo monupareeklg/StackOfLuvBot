@@ -99,7 +99,6 @@ client.on("messageCreate", async (message) => {
       });
 
       const stream = await playdl.stream(url); // Fetch audio stream
-      console.log("Stream created:", stream);
       const resource = createAudioResource(stream.stream, {
         inputType: stream.type, // Stream type is required by play-dl
       });
