@@ -1,14 +1,20 @@
 // Import dependencies
 require("dotenv").config();
-const { Client, GatewayIntentBits } = require("discord.js");
 const {
-  joinVoiceChannel,
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus,
-} = require("@discordjs/voice");
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  PermissionsBitField,
+} = require("discord.js");
+const { joinVoiceChannel, getVoiceConnection } = require("@discordjs/voice");
 const fs = require("fs");
-const playdl = require("play-dl");
 
 let badWords = [];
 
@@ -30,45 +36,37 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
+  partials: [Partials.Channel],
 });
 
-// Event: Bot is ready
+// Bot ready
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
-  loadBadWords(); // Load bad words on bot startup
+  loadBadWords(); // Load bad words on startup
 });
 
-// Event: Message received
+const CREATOR_CATEGORY_NAME = "🎸 Creator's Core"; // Feel free to change
+
+// Handle messages
 client.on("messageCreate", async (message) => {
-  // Ignore bot messages
   if (message.author.bot) return;
 
   if (message.content.startsWith("$join")) {
     const channel = message.member.voice.channel;
-
-    if (!channel) {
-      return message.reply(
-        "You need to be in a voice channel to use this command!"
-      );
-    }
+    if (!channel) return message.reply("Join a voice channel first!");
 
     try {
-      // Join the voice channel
       joinVoiceChannel({
         channelId: channel.id,
         guildId: channel.guild.id,
         adapterCreator: channel.guild.voiceAdapterCreator,
       });
 
-      // Notify the text channel
       const textChannel = channel.guild.channels.cache.find(
-        (ch) => ch.name === "💬-general-chat" // Replace with your target text channel
+        (ch) => ch.name === "💬-general-chat"
       );
-
       if (textChannel) {
-        textChannel.send(
-          `🚨 Moderation alert: Bot is now monitoring **${channel.name}**.`
-        );
+        textChannel.send(`🚨 Bot is now monitoring **${channel.name}**.`);
       }
 
       message.reply(`Joined ${channel.name}! 🎵`);
@@ -78,64 +76,9 @@ client.on("messageCreate", async (message) => {
     }
   }
 
-  if (message.content.startsWith("$play")) {
-    const args = message.content.split(" ");
-    const url = args[1];
-
-    if (!url || !(await playdl.validate(url))) {
-      return message.reply("Please provide a valid YouTube URL!");
-    }
-
-    const channel = message.member.voice.channel;
-    if (!channel) {
-      return message.reply("You need to be in a voice channel to play music!");
-    }
-
-    try {
-      const connection = joinVoiceChannel({
-        channelId: channel.id,
-        guildId: channel.guild.id,
-        adapterCreator: channel.guild.voiceAdapterCreator,
-      });
-
-      const stream = await playdl.stream(url); // Fetch audio stream
-      const resource = createAudioResource(stream.stream, {
-        inputType: stream.type, // Stream type is required by play-dl
-      });
-      console.log("Audio resource created:", resource);
-
-      const player = createAudioPlayer();
-      connection.subscribe(player);
-      player.play(resource);
-
-      message.reply(`Now playing: ${url}`);
-
-      player.on(AudioPlayerStatus.Playing, () => {
-        console.log("Audio player is playing!");
-      });
-
-      player.on(AudioPlayerStatus.Idle, () => {
-        console.log("Audio player is idle, disconnecting...");
-        connection.destroy();
-      });
-
-      player.on("error", (error) => {
-        console.error("Audio Player Error:", error);
-      });
-    } catch (error) {
-      console.error("Error playing music:", error);
-      message.reply("Failed to play music. 😞");
-    }
-  }
-
   if (message.content.startsWith("$leave")) {
     const channel = message.member.voice.channel;
-
-    if (!channel) {
-      return message.reply(
-        "You need to be in a voice channel to use this command!"
-      );
-    }
+    if (!channel) return message.reply("Join a voice channel first!");
 
     const connection = getVoiceConnection(channel.guild.id);
     if (connection) {
@@ -146,34 +89,214 @@ client.on("messageCreate", async (message) => {
     }
   }
 
-  // Check if the message has attachments (e.g., images, files)
-  if (message.attachments.size > 0) {
-    return; // Skip processing if the message contains attachments
+  // Register creator embed with button
+  if (message.content.toLowerCase().startsWith("$registercreator")) {
+    const embed = new EmbedBuilder()
+      .setTitle("🎨 Creator Registration")
+      .setDescription(
+        "Click the button below to register as a creator and get your own private channel + role!"
+      )
+      .setColor("Random");
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("start_creator_registration")
+        .setLabel("Start Registration")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await message.reply({ embeds: [embed], components: [row] });
   }
 
-  // Custom responses based on the message content
-  const customResponses = {
-    hi: "Hello There! 🎉",
-    hello: "Hey! Glad to have you here. 😊",
-    help: "Sure! Let me know how I can assist you. 🤖",
-    bye: "Goodbye! Hope to see you again soon. 👋",
-    "good afternoon": "Good Afternoon to you too! 🌞",
-    "good morning": "Good Morning! Have a great day. 🌅",
-    "good night": "Good Night! Sweet dreams. 🌙",
-  };
+  // ----------------------------
+  // $follow @creatorname command
+  // ----------------------------
+  if (message.content.toLowerCase().startsWith("$follow")) {
+    const mentioned = message.mentions.roles.first();
+    if (!mentioned) {
+      return message.reply(
+        "⚠️ Please mention the creator's role. Example: `$follow @CreatorRole`"
+      );
+    }
 
-  // Convert the message to lowercase for case-insensitive matching
-  const messageContent = message.content.toLowerCase();
+    try {
+      const member = await message.guild.members.fetch(message.author.id);
 
-  // Check if the message contains any key in customResponses
-  for (const key in customResponses) {
-    if (messageContent.includes(key)) {
-      // Send the corresponding custom response
-      message.reply(customResponses[key]);
-      break; // Stop after finding the first match
+      if (member.roles.cache.has(mentioned.id)) {
+        return message.reply("🤔 You’re already following this creator!");
+      }
+
+      await member.roles.add(mentioned);
+      message.reply(
+        `✅ You’re now following **${mentioned.name}**! You can view their channel now.`
+      );
+    } catch (err) {
+      console.error("Follow error:", err);
+      message.reply(
+        "❌ Something went wrong while trying to follow. Please try again."
+      );
+    }
+  }
+
+  // -------------------------------
+  // $unfollow @creatorname command
+  // -------------------------------
+  if (message.content.toLowerCase().startsWith("$unfollow")) {
+    const mentioned = message.mentions.roles.first();
+    if (!mentioned) {
+      return message.reply(
+        "⚠️ Please mention the creator's role. Example: `$unfollow @CreatorRole`"
+      );
+    }
+
+    try {
+      const member = await message.guild.members.fetch(message.author.id);
+
+      if (!member.roles.cache.has(mentioned.id)) {
+        return message.reply("🤷‍♂️ You're not following this creator yet.");
+      }
+
+      await member.roles.remove(mentioned);
+      message.reply(
+        `🚫 You've unfollowed **${mentioned.name}**. You won't see their channel anymore.`
+      );
+    } catch (err) {
+      console.error("Unfollow error:", err);
+      message.reply("❌ Failed to unfollow. Try again later.");
+    }
+  }
+
+  // // Custom responses
+  // const customResponses = {
+  //   hi: "Hello There! 🎉",
+  //   hello: "Hey! Glad to have you here. 😊",
+  //   help: "Sure! Let me know how I can assist you. 🤖",
+  //   bye: "Goodbye! Hope to see you again soon. 👋",
+  //   "good afternoon": "Good Afternoon to you too! 🌞",
+  //   "good morning": "Good Morning! Have a great day. 🌅",
+  //   "good night": "Good Night! Sweet dreams. 🌙",
+  // };
+
+  // const messageContent = message.content.toLowerCase();
+
+  // for (const key in customResponses) {
+  //   if (messageContent.includes(key)) {
+  //     message.reply(customResponses[key]);
+  //     break;
+  //   }
+  // }
+});
+
+// Handle interaction events (buttons & modals)
+client.on("interactionCreate", async (interaction) => {
+  if (
+    interaction.isButton() &&
+    interaction.customId === "start_creator_registration"
+  ) {
+    const modal = new ModalBuilder()
+      .setCustomId("creator_registration_modal")
+      .setTitle("Register as Creator");
+
+    const creatorNameInput = new TextInputBuilder()
+      .setCustomId("creatorName")
+      .setLabel("Creator Name")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const contentTypeInput = new TextInputBuilder()
+      .setCustomId("contentType")
+      .setLabel("Content Type (e.g., Gaming, Art, Music)")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const bioInput = new TextInputBuilder()
+      .setCustomId("bio")
+      .setLabel("Short Bio")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    const row1 = new ActionRowBuilder().addComponents(creatorNameInput);
+    const row2 = new ActionRowBuilder().addComponents(contentTypeInput);
+    const row3 = new ActionRowBuilder().addComponents(bioInput);
+
+    modal.addComponents(row1, row2, row3);
+    await interaction.showModal(modal);
+  }
+
+  // Handle modal submission
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId === "creator_registration_modal"
+  ) {
+    const creatorName = interaction.fields.getTextInputValue("creatorName");
+    const contentType = interaction.fields.getTextInputValue("contentType");
+    const bio = interaction.fields.getTextInputValue("bio");
+
+    try {
+      const guild = interaction.guild;
+      const member = await guild.members.fetch(interaction.user.id);
+
+      // Create Role
+      const role = await guild.roles.create({
+        name: creatorName,
+        color: "Random",
+        reason: "New Creator Registered",
+        mentionable: true, // ✅ So users can follow and mention it
+      });
+
+      let category = guild.channels.cache.find(
+        (c) => c.name === CREATOR_CATEGORY_NAME && c.type === 4
+      );
+
+      await member.roles.add(role);
+
+      // Create private channel
+      const channelName = `${creatorName
+        .toLowerCase()
+        .replace(/\s+/g, "-")}-zone`;
+
+      await guild.channels.create({
+        name: channelName,
+        type: 0, // GUILD_TEXT
+        parent: category.id, // 👈 This assigns it to the category
+        permissionOverwrites: [
+          {
+            id: guild.roles.everyone.id, // 🛠️ Deny @everyone
+            deny: [PermissionsBitField.Flags.ViewChannel],
+          },
+          {
+            id: role.id, // 🛠️ Allow creator's role
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.ReadMessageHistory,
+            ],
+          },
+          {
+            id: interaction.user.id, // 🛠️ Allow the user directly
+            allow: [
+              PermissionsBitField.Flags.ViewChannel,
+              PermissionsBitField.Flags.SendMessages,
+              PermissionsBitField.Flags.ReadMessageHistory,
+            ],
+          },
+        ],
+      });
+
+      await interaction.reply({
+        content: `✅ You're now registered as a creator!\n**Role:** ${role}\n**Channel:** #${channelName}`,
+        ephemeral: true,
+      });
+    } catch (err) {
+      console.error("Error in creator registration:", err);
+      await interaction.reply({
+        content:
+          "❌ Something went wrong while registering. Please try again later.",
+        ephemeral: true,
+      });
     }
   }
 });
 
-// Log in to Discord with your bot token
+// Login
 client.login(process.env.DISCORD_TOKEN);
